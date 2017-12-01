@@ -1,3 +1,4 @@
+import os
 import json
 
 import websocket
@@ -5,73 +6,49 @@ import requests as rq
 from ConfigParser import ConfigParser
 
 from lib.logger import Logger
+from lib.client_handler import ClientHandler
 
-
-client_config_path = './client_config.cfg'
+client_config_path = os.environ.get('CONFIG_FILE_PATH')
 config_instance = ConfigParser()
 config_instance.read(client_config_path)
 
+error_log_file_path = config_instance.get(
+    'settings', 'error_log_file_path').strip()
+
+info_log_file_path = config_instance.get(
+    'settings', 'info_log_file_path').strip()
+
 logger_instance = Logger(**{
-    'file_name': 'error.log',
-    'log_dir': config_instance.get('settings', 'log_dir'),
+    'file_name': os.path.basename(error_log_file_path),
+    'log_dir': os.path.dirname(error_log_file_path),
     'stream_handler': True,
-    'file_handler': True,
-})
+    'file_handler': True})
 
 logger_instance_info = Logger(**{
-    'file_name': 'client.log',
-    'log_dir': config_instance.get('settings', 'log_dir'),
+    'file_name': os.path.basename(info_log_file_path),
+    'log_dir': os.path.dirname(info_log_file_path),
     'file_handler': False,
-    'stream_handler': True
-})
+    'stream_handler': True})
+
+client_handler_instance = ClientHandler()
 
 
-class Client:
+def get_token(api_protocol, server, port, auth_api_endpoint, **credential):
+    try:
+        if 'email' not in credential or 'password' not in credential:
+            raise Exception('invalid credential param')
+        auth_url = '{}://{}:{}/{}'.format(api_protocol,
+                                          server,
+                                          port,
+                                          auth_api_endpoint)
 
-    def __init__(self, server=None, port=80, https_enabled=False):
-        try:
-            if server is None:
-                raise Exception('server ip address not provided')
-                self.auth_api_endpoint = 'get_token/'
-                self.server = server
-                self.port = port
-                if https_enabled:
-                    self.api_protocol = 'https'
-                else:
-                    self.api_protocol = 'http'
-        except Exception as error:
-            logger_instance.logger.error(
-                'Client::__init__:{}'.format(error.message))
-
-    def get_token(self, **credential):
-        try:
-            if 'email' not in credential or 'password' not in credential:
-                raise Exception('invalid credential param')
-            auth_url = '{}://{}:{}/{}'.format(self.api_protocol,
-                                              self.server,
-                                              self.port,
-                                              self.auth_api_endpoint)
-
-            response = rq.post(auth_url, data=json.dumps(credential))
-            if response.status_code == 200:
-                return response.json()['token']
-            else:
-                return None
-
-        except Exception as error:
-            logger_instance.logger.error(
-                'Client::get_token:{}'.format(error.message))
+        response = rq.post(auth_url, data=json.dumps(credential))
+        if response.status_code == 200:
+            return response.json()['token']
+        else:
             return None
-
-    def set_token(self, token):
-        """set_token method to set token in config file."""
-        try:
-            config_instance.set('client', 'token', token)
-            return True
-        except Exception as error:
-            logger_instance.logger.error(
-                'Client::set_token:{}'.format(error.message))
-            return False
+    except Exception:
+        return None
 
 
 class ClientSocketHandler:
@@ -80,8 +57,7 @@ class ClientSocketHandler:
     def __init__(self):
         pass
 
-    @staticmethod
-    def on_open(websocket_instance):
+    def on_open(self, websocket_instance):
         try:
             logger_instance_info.logger.info('socket opened')
         except Exception as error:
@@ -89,25 +65,28 @@ class ClientSocketHandler:
                 'ClientSocketHandler::on_open:{}'.format(
                     error.message))
 
-    @staticmethod
-    def on_message(websocket_instance, message):
+    def on_message(self, websocket_instance, message):
         """on_message event handler for client socket."""
         try:
-            print(message)
+            response = client_handler_instance.process_server_message(
+                message=message)
+            if response is not None:
+                websocket_instance.send(response)
+            else:
+                websocket_instance.send('client unable to parse params.')
+
         except Exception as error:
             logger_instance.logger.error(
                 'ClientSocketHandler::on_message:{}'.format(
                     error.message))
 
-    @staticmethod
-    def on_error(websocket_instance, error):
+    def on_error(self, websocket_instance, error):
         """on_error event handler for client socket."""
         logger_instance.logger.error(
             'ClientSocketHandler::on_error:{}'.format(
                 error))
 
-    @staticmethod
-    def on_close(websocket_instance):
+    def on_close(self, websocket_instance):
         """on_close event handler for client socket."""
         try:
             print('[*]client socket closed...')
@@ -120,17 +99,24 @@ class ClientSocketHandler:
 def on_open(ws):
     logger_instance_info.logger.info('opened socket connection')
 
+
 if __name__ == '__main__':
-    client_instance = Client(server=config_instance.get('server', 'url'),
-                             port=int(config_instance.get('server', 'port')))
-    header = {'Authorization': config_instance.get('client', 'token')}
-    websocket.enableTrace(True)
-    ws = websocket.WebSocketApp(
-        'ws://{}:{}/sock_server/'.format(client_instance.server,
-                                         client_instance.port),
-        header=header,
-        on_message=ClientSocketHandler.on_message,
-        on_error=ClientSocketHandler.on_error,
-        on_close=ClientSocketHandler.on_close)
-    ws.on_open = on_open
-    ws.run_forever()
+    try:
+        header = {'Authorization': config_instance.get('client', 'token')}
+        server = config_instance.get('server', 'url')
+        port = config_instance.get('server', 'port')
+        websocket.enableTrace(True)
+        client_socket_handler_instance = ClientSocketHandler()
+        ws = websocket.WebSocketApp(
+            'ws://{}:{}/sock_server/'.format(server,
+                                             port),
+            header=header,
+            on_message=client_socket_handler_instance.on_message,
+            on_error=client_socket_handler_instance.on_error,
+            on_close=client_socket_handler_instance.on_close)
+
+        ws.on_open = client_socket_handler_instance.on_open
+        ws.run_forever()
+    except Exception as error:
+        logger_instance.logger.error(
+            'client::main:{}'.format(error.message))
