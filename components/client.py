@@ -102,7 +102,9 @@ def on_open(ws):
 
 if __name__ == '__main__':
     try:
-        header = {'Authorization': config_instance.get('client', 'token')}
+        header = {'Authorization': config_instance.get('client', 'token'),
+                  'client_id': config_instance.get('client', 'id')}
+
         server = config_instance.get('server', 'url')
         port = config_instance.get('server', 'port')
         websocket.enableTrace(True)
