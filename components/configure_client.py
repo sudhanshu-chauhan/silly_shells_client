@@ -3,10 +3,17 @@ import sys
 import getpass
 import uuid
 import json
+import socket
 
 from ConfigParser import ConfigParser
 from crontab import CronTab
 import requests as rq
+
+
+def get_ip_address():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("8.8.8.8", 80))
+    return s.getsockname()[0]
 
 
 def get_token(api_protocol, server, port, auth_api_endpoint, **credential):
@@ -88,6 +95,15 @@ def main():
             print('setting client details...')
             client_name = str(raw_input('enter a client name:'))
             config_instance.set('client', 'name', client_name)
+            description = str(raw_input('enter client description'))
+            client_machine_params = {}
+
+            client_machine_params['name'] = client_name
+            client_machine_params['description'] = description
+            client_machine_params['mac_address'] = hex(uuid.getnode())[2:-1]
+            client_machine_params['internal_ip'] = get_ip_address()
+            client_machine_params['public_ip'] = rq.get(
+                'http://wgetip.com').content
             client_unique_id = str(uuid.uuid4())
             print('setting client unique id:{}'.format(client_unique_id))
             config_instance.set('client', 'id', client_unique_id)
